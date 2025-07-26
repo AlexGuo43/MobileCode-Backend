@@ -1,29 +1,45 @@
-import sqlite3 from 'sqlite3';
-import { promisify } from 'util';
+import { Pool, PoolClient } from 'pg';
 import path from 'path';
 
-// Import PostgreSQL service for production
-import { db as pgDb } from './database-pg';
-
-class DatabaseService {
-  private db: sqlite3.Database | null = null;
+class PostgreSQLDatabaseService {
+  private pool: Pool | null = null;
 
   async connect(): Promise<void> {
-    const dbPath = process.env.NODE_ENV === 'production' 
-      ? path.join(__dirname, '../../data/mobilecoder.db')
-      : path.join(__dirname, '../../mobilecoder.db');
-
-    this.db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        console.error('Error opening database:', err);
-        throw err;
+    let connectionString = process.env.DATABASE_URL;
+    
+    if (!connectionString) {
+      // Fallback to individual environment variables
+      const { PGUSER, PGPASSWORD, PGHOST, PGPORT, PGDATABASE } = process.env;
+      
+      if (!PGUSER || !PGPASSWORD || !PGHOST || !PGPORT || !PGDATABASE) {
+        throw new Error(
+          'Database configuration missing. Either set DATABASE_URL or all of: PGUSER, PGPASSWORD, PGHOST, PGPORT, PGDATABASE'
+        );
       }
-      console.log('Connected to SQLite database');
+      
+      connectionString = `postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}`;
+    }
+
+    console.log('Connecting to database with:', connectionString.replace(/(:\/\/[^:]+:)[^@]+(@)/, '$1***$2'));
+
+    this.pool = new Pool({
+      connectionString,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
     });
 
-    // Enable foreign keys
-    await this.run('PRAGMA foreign_keys = ON');
-    
+    // Test connection
+    try {
+      const client = await this.pool.connect();
+      console.log('Connected to PostgreSQL database');
+      client.release();
+    } catch (err) {
+      console.error('Error connecting to database:', err);
+      throw err;
+    }
+
     // Initialize tables
     await this.initializeTables();
   }
@@ -35,8 +51,8 @@ class DatabaseService {
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         name TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
       
       `CREATE TABLE IF NOT EXISTS devices (
@@ -45,8 +61,8 @@ class DatabaseService {
         name TEXT NOT NULL,
         type TEXT NOT NULL CHECK (type IN ('mobile', 'desktop')),
         platform TEXT NOT NULL,
-        last_active DATETIME DEFAULT CURRENT_TIMESTAMP,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )`,
       
@@ -54,9 +70,9 @@ class DatabaseService {
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         code TEXT UNIQUE NOT NULL,
-        expires_at DATETIME NOT NULL,
+        expires_at TIMESTAMP NOT NULL,
         used BOOLEAN DEFAULT FALSE,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       )`,
       
@@ -68,11 +84,11 @@ class DatabaseService {
         content_hash TEXT NOT NULL,
         file_type TEXT NOT NULL,
         size INTEGER NOT NULL,
-        last_modified DATETIME NOT NULL,
+        last_modified TIMESTAMP NOT NULL,
         device_id TEXT NOT NULL,
         version INTEGER DEFAULT 1,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
         FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE CASCADE,
         UNIQUE(user_id, filename)
@@ -85,8 +101,8 @@ class DatabaseService {
         status TEXT NOT NULL CHECK (status IN ('active', 'completed', 'failed')),
         files_synced INTEGER DEFAULT 0,
         files_failed INTEGER DEFAULT 0,
-        started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        completed_at DATETIME,
+        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
         FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE CASCADE
       )`,
@@ -96,8 +112,8 @@ class DatabaseService {
         user_id TEXT NOT NULL,
         device_id TEXT NOT NULL,
         token TEXT UNIQUE NOT NULL,
-        expires_at DATETIME NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
         FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE CASCADE
       )`
@@ -122,68 +138,67 @@ class DatabaseService {
     }
   }
 
-  async run(sql: string, params: any[] = []): Promise<sqlite3.RunResult> {
-    if (!this.db) throw new Error('Database not connected');
+  async run(sql: string, params: any[] = []): Promise<{ changes: number; lastID?: string }> {
+    if (!this.pool) throw new Error('Database not connected');
     
-    return new Promise((resolve, reject) => {
-      this.db!.run(sql, params, function(err) {
-        if (err) reject(err);
-        else resolve(this);
-      });
-    });
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(sql, params);
+      return { changes: result.rowCount || 0, lastID: result.rows[0]?.id };
+    } finally {
+      client.release();
+    }
   }
 
   async get<T = any>(sql: string, params: any[] = []): Promise<T | undefined> {
-    if (!this.db) throw new Error('Database not connected');
+    if (!this.pool) throw new Error('Database not connected');
     
-    return new Promise((resolve, reject) => {
-      this.db!.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row as T);
-      });
-    });
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(sql, params);
+      return result.rows[0] as T;
+    } finally {
+      client.release();
+    }
   }
 
   async all<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-    if (!this.db) throw new Error('Database not connected');
+    if (!this.pool) throw new Error('Database not connected');
     
-    return new Promise((resolve, reject) => {
-      this.db!.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows as T[]);
-      });
-    });
+    const client = await this.pool.connect();
+    try {
+      const result = await client.query(sql, params);
+      return result.rows as T[];
+    } finally {
+      client.release();
+    }
   }
 
   async close(): Promise<void> {
-    if (!this.db) return;
+    if (!this.pool) return;
     
-    return new Promise((resolve, reject) => {
-      this.db!.close((err) => {
-        if (err) reject(err);
-        else {
-          this.db = null;
-          console.log('Database connection closed');
-          resolve();
-        }
-      });
-    });
+    await this.pool.end();
+    this.pool = null;
+    console.log('Database connection closed');
   }
 
-  async beginTransaction(): Promise<void> {
-    await this.run('BEGIN TRANSACTION');
+  async beginTransaction(): Promise<PoolClient> {
+    if (!this.pool) throw new Error('Database not connected');
+    
+    const client = await this.pool.connect();
+    await client.query('BEGIN');
+    return client;
   }
 
-  async commit(): Promise<void> {
-    await this.run('COMMIT');
+  async commit(client: PoolClient): Promise<void> {
+    await client.query('COMMIT');
+    client.release();
   }
 
-  async rollback(): Promise<void> {
-    await this.run('ROLLBACK');
+  async rollback(client: PoolClient): Promise<void> {
+    await client.query('ROLLBACK');
+    client.release();
   }
 }
 
-// Export the appropriate database service based on environment
-export const db = process.env.NODE_ENV === 'production' && process.env.DATABASE_URL 
-  ? pgDb 
-  : new DatabaseService();
+export const db = new PostgreSQLDatabaseService();

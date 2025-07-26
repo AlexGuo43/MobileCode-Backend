@@ -13,7 +13,7 @@ class SyncService {
     
       // Check if file already exists
       const existingFile = await db.get<SyncFile>(
-        'SELECT * FROM sync_files WHERE user_id = ? AND filename = ?',
+        'SELECT * FROM sync_files WHERE user_id = $1 AND filename = $2',
         [userId, data.filename]
       );
 
@@ -47,10 +47,10 @@ class SyncService {
         const encryptedContent = encryption.encrypt(data.content);
         await db.run(
           `UPDATE sync_files 
-           SET content = ?, content_hash = ?, file_type = ?, size = ?, 
-               last_modified = ?, device_id = ?, version = version + 1, 
-               updated_at = datetime('now')
-           WHERE user_id = ? AND filename = ?`,
+           SET content = $1, content_hash = $2, file_type = $3, size = $4, 
+               last_modified = $5, device_id = $6, version = version + 1, 
+               updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = $7 AND filename = $8`,
           [
             encryptedContent, contentHash, data.file_type, 
             data.content.length, data.last_modified, deviceId, 
@@ -59,7 +59,7 @@ class SyncService {
         );
 
         const updatedFile = await db.get<SyncFile>(
-          'SELECT * FROM sync_files WHERE user_id = ? AND filename = ?',
+          'SELECT * FROM sync_files WHERE user_id = $1 AND filename = $2',
           [userId, data.filename]
         );
 
@@ -73,7 +73,7 @@ class SyncService {
           `INSERT INTO sync_files 
            (id, user_id, filename, content, content_hash, file_type, size, 
             last_modified, device_id, version) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)`,
           [
             fileId, userId, data.filename, encryptedContent, contentHash,
             data.file_type, data.content.length, data.last_modified, deviceId
@@ -81,7 +81,7 @@ class SyncService {
         );
 
         const newFile = await db.get<SyncFile>(
-          'SELECT * FROM sync_files WHERE id = ?',
+          'SELECT * FROM sync_files WHERE id = $1',
           [fileId]
         );
 
@@ -95,7 +95,7 @@ class SyncService {
 
   async downloadFile(userId: string, filename: string): Promise<SyncFile | null> {
     const file = await db.get<SyncFile>(
-      'SELECT * FROM sync_files WHERE user_id = ? AND filename = ?',
+      'SELECT * FROM sync_files WHERE user_id = $1 AND filename = $2',
       [userId, filename]
     );
 
@@ -119,7 +119,7 @@ class SyncService {
       `SELECT sf.*, d.name as device_name 
        FROM sync_files sf 
        LEFT JOIN devices d ON sf.device_id = d.id 
-       WHERE sf.user_id = ? 
+       WHERE sf.user_id = $1 
        ORDER BY sf.updated_at DESC`,
       [userId]
     );
@@ -147,7 +147,7 @@ class SyncService {
     
     // Start sync session
     await db.run(
-      'INSERT INTO sync_sessions (id, user_id, device_id, status) VALUES (?, ?, ?, ?)',
+      'INSERT INTO sync_sessions (id, user_id, device_id, status) VALUES ($1, $2, $3, $4)',
       [sessionId, userId, deviceId, 'active']
     );
 
@@ -162,7 +162,7 @@ class SyncService {
     try {
       // Get all server files for this user
       const serverFiles = await db.all<SyncFile>(
-        'SELECT * FROM sync_files WHERE user_id = ?',
+        'SELECT * FROM sync_files WHERE user_id = $1',
         [userId]
       );
 
@@ -215,9 +215,9 @@ class SyncService {
       // Complete sync session
       await db.run(
         `UPDATE sync_sessions 
-         SET status = 'completed', files_synced = ?, files_failed = ?, 
-             completed_at = datetime('now') 
-         WHERE id = ?`,
+         SET status = 'completed', files_synced = $1, files_failed = $2, 
+             completed_at = CURRENT_TIMESTAMP 
+         WHERE id = $3`,
         [filesSucceeded, filesFailed, sessionId]
       );
 
@@ -227,8 +227,8 @@ class SyncService {
       // Mark session as failed
       await db.run(
         `UPDATE sync_sessions 
-         SET status = 'failed', files_failed = ?, completed_at = datetime('now') 
-         WHERE id = ?`,
+         SET status = 'failed', files_failed = $1, completed_at = CURRENT_TIMESTAMP 
+         WHERE id = $2`,
         [filesFailed, sessionId]
       );
       
@@ -240,7 +240,7 @@ class SyncService {
 
   async deleteFile(userId: string, filename: string): Promise<boolean> {
     const result = await db.run(
-      'DELETE FROM sync_files WHERE user_id = ? AND filename = ?',
+      'DELETE FROM sync_files WHERE user_id = $1 AND filename = $2',
       [userId, filename]
     );
 
@@ -255,14 +255,14 @@ class SyncService {
   }> {
     // Get total files and size
     const stats = await db.get<{ totalFiles: number; totalSize: number }>(
-      'SELECT COUNT(*) as totalFiles, SUM(size) as totalSize FROM sync_files WHERE user_id = ?',
+      'SELECT COUNT(*) as totalFiles, SUM(size) as totalSize FROM sync_files WHERE user_id = $1',
       [userId]
     );
 
     // Get last sync
     const lastSyncSession = await db.get<{ completed_at: string }>(
       `SELECT completed_at FROM sync_sessions 
-       WHERE user_id = ? AND status = 'completed' 
+       WHERE user_id = $1 AND status = 'completed' 
        ORDER BY completed_at DESC LIMIT 1`,
       [userId]
     );
@@ -272,7 +272,7 @@ class SyncService {
       `SELECT d.name, d.last_active, COUNT(sf.id) as fileCount
        FROM devices d
        LEFT JOIN sync_files sf ON d.id = sf.device_id
-       WHERE d.user_id = ?
+       WHERE d.user_id = $1
        GROUP BY d.id, d.name, d.last_active
        ORDER BY d.last_active DESC`,
       [userId]
@@ -292,7 +292,7 @@ class SyncService {
 
   private async getDeviceName(deviceId: string): Promise<string> {
     const device = await db.get<{ name: string }>(
-      'SELECT name FROM devices WHERE id = ?',
+      'SELECT name FROM devices WHERE id = $1',
       [deviceId]
     );
     return device?.name || 'Unknown Device';

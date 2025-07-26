@@ -18,7 +18,7 @@ class AuthService {
   async createUser(data: CreateUserRequest): Promise<Omit<User, 'password_hash'>> {
     // Check if user already exists
     const existingUser = await db.get<User>(
-      'SELECT id FROM users WHERE email = ?',
+      'SELECT id FROM users WHERE email = $1',
       [data.email]
     );
 
@@ -33,12 +33,12 @@ class AuthService {
     // Create user
     const userId = encryption.generateId();
     await db.run(
-      'INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)',
+      'INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, $3, $4)',
       [userId, data.email, passwordHash, data.name]
     );
 
     const user = await db.get<User>(
-      'SELECT id, email, name, created_at, updated_at FROM users WHERE id = ?',
+      'SELECT id, email, name, created_at, updated_at FROM users WHERE id = $1',
       [userId]
     );
 
@@ -52,7 +52,7 @@ class AuthService {
   async login(data: LoginRequest): Promise<LoginResponse> {
     // Find user
     const user = await db.get<User>(
-      'SELECT * FROM users WHERE email = ?',
+      'SELECT * FROM users WHERE email = $1',
       [data.email]
     );
 
@@ -83,7 +83,7 @@ class AuthService {
   async generatePairingCode(userId: string): Promise<string> {
     // Invalidate existing unused codes
     await db.run(
-      'UPDATE pairing_codes SET used = TRUE WHERE user_id = ? AND used = FALSE',
+      'UPDATE pairing_codes SET used = TRUE WHERE user_id = $1 AND used = FALSE',
       [userId]
     );
 
@@ -92,7 +92,7 @@ class AuthService {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
     await db.run(
-      'INSERT INTO pairing_codes (id, user_id, code, expires_at) VALUES (?, ?, ?, ?)',
+      'INSERT INTO pairing_codes (id, user_id, code, expires_at) VALUES ($1, $2, $3, $4)',
       [encryption.generateId(), userId, code, expiresAt.toISOString()]
     );
 
@@ -104,7 +104,7 @@ class AuthService {
     const pairingCode = await db.get<any>(
       `SELECT pc.*, u.* FROM pairing_codes pc 
        JOIN users u ON pc.user_id = u.id 
-       WHERE pc.code = ? AND pc.used = FALSE AND pc.expires_at > datetime('now')`,
+       WHERE pc.code = $1 AND pc.used = FALSE AND pc.expires_at > now()`,
       [data.code]
     );
 
@@ -114,7 +114,7 @@ class AuthService {
 
     // Mark code as used
     await db.run(
-      'UPDATE pairing_codes SET used = TRUE WHERE code = ?',
+      'UPDATE pairing_codes SET used = TRUE WHERE code = $1',
       [data.code]
     );
 
@@ -146,7 +146,7 @@ class AuthService {
     try {
       // Check if token exists in database and is not expired
       const authToken = await db.get<AuthToken>(
-        'SELECT * FROM auth_tokens WHERE token = ? AND expires_at > datetime("now")',
+        'SELECT * FROM auth_tokens WHERE token = $1 AND expires_at > CURRENT_TIMESTAMP',
         [token]
       );
 
@@ -163,7 +163,7 @@ class AuthService {
 
       // Update device last active
       await db.run(
-        'UPDATE devices SET last_active = datetime("now") WHERE id = ?',
+        'UPDATE devices SET last_active = CURRENT_TIMESTAMP WHERE id = $1',
         [authToken.device_id]
       );
 
@@ -178,20 +178,20 @@ class AuthService {
   }
 
   async logout(token: string): Promise<void> {
-    await db.run('DELETE FROM auth_tokens WHERE token = ?', [token]);
+    await db.run('DELETE FROM auth_tokens WHERE token = $1', [token]);
   }
 
   async getUserDevices(userId: string): Promise<Device[]> {
     return await db.all<Device>(
-      'SELECT * FROM devices WHERE user_id = ? ORDER BY last_active DESC',
+      'SELECT * FROM devices WHERE user_id = $1 ORDER BY last_active DESC',
       [userId]
     );
   }
 
   async removeDevice(userId: string, deviceId: string): Promise<void> {
     // Remove device and its auth tokens
-    await db.run('DELETE FROM auth_tokens WHERE device_id = ?', [deviceId]);
-    await db.run('DELETE FROM devices WHERE id = ? AND user_id = ?', [deviceId, userId]);
+    await db.run('DELETE FROM auth_tokens WHERE device_id = $1', [deviceId]);
+    await db.run('DELETE FROM devices WHERE id = $1 AND user_id = $2', [deviceId, userId]);
   }
 
   private async createOrUpdateDevice(userId: string, data: any): Promise<Device> {
@@ -199,26 +199,26 @@ class AuthService {
     
     // Check if device with same name already exists
     const existingDevice = await db.get<Device>(
-      'SELECT * FROM devices WHERE user_id = ? AND name = ?',
+      'SELECT * FROM devices WHERE user_id = $1 AND name = $2',
       [userId, data.device_name]
     );
 
     if (existingDevice) {
       // Update existing device
       await db.run(
-        'UPDATE devices SET type = ?, platform = ?, last_active = datetime("now") WHERE id = ?',
+        'UPDATE devices SET type = $1, platform = $2, last_active = CURRENT_TIMESTAMP WHERE id = $3',
         [data.device_type, data.platform, existingDevice.id]
       );
       
-      return await db.get<Device>('SELECT * FROM devices WHERE id = ?', [existingDevice.id]) as Device;
+      return await db.get<Device>('SELECT * FROM devices WHERE id = $1', [existingDevice.id]) as Device;
     } else {
       // Create new device
       await db.run(
-        'INSERT INTO devices (id, user_id, name, type, platform) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO devices (id, user_id, name, type, platform) VALUES ($1, $2, $3, $4, $5)',
         [deviceId, userId, data.device_name, data.device_type, data.platform]
       );
 
-      return await db.get<Device>('SELECT * FROM devices WHERE id = ?', [deviceId]) as Device;
+      return await db.get<Device>('SELECT * FROM devices WHERE id = $1', [deviceId]) as Device;
     }
   }
 
@@ -234,13 +234,13 @@ class AuthService {
 
     // Clean up old tokens for this device
     await db.run(
-      'DELETE FROM auth_tokens WHERE device_id = ?',
+      'DELETE FROM auth_tokens WHERE device_id = $1',
       [deviceId]
     );
 
     // Store new token
     await db.run(
-      'INSERT INTO auth_tokens (id, user_id, device_id, token, expires_at) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO auth_tokens (id, user_id, device_id, token, expires_at) VALUES ($1, $2, $3, $4, $5)',
       [tokenId, userId, deviceId, tokenString, expiresAt.toISOString()]
     );
 

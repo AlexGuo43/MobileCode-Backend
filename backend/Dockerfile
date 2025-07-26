@@ -7,8 +7,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci
 
 # Copy source code
 COPY . .
@@ -16,8 +16,8 @@ COPY . .
 # Build TypeScript
 RUN npm run build
 
-# Create data directory for SQLite database
-RUN mkdir -p /app/data
+# Remove dev dependencies and reinstall only production dependencies
+RUN npm ci --omit=dev
 
 # Expose port
 EXPOSE 3000
