@@ -27,6 +27,7 @@ services:
 
   prometheus:
     image: prom/prometheus
+    restart: always
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -34,6 +35,7 @@ services:
 
   grafana:
     image: grafana/grafana
+    restart: always
     ports:
       - "3001:3000"
     # environment:
