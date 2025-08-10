@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import client from 'prom-client';
 
 // Load environment variables
 dotenv.config();
@@ -44,6 +45,14 @@ app.use(express.urlencoded({ extended: true }));
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('combined'));
 }
+
+// Start collecting default metrics (CPU, memory, etc)
+client.collectDefaultMetrics();
+
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType);
+  res.end(await client.register.metrics());
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
