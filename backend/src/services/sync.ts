@@ -1,5 +1,6 @@
 import { db } from './database';
 import { encryption } from './encryption';
+import { storageService } from './storage';
 import { SyncFile, SyncFileRequest, SyncResponse, SyncSession } from '../types';
 
 class SyncService {
@@ -63,6 +64,9 @@ class SyncService {
           [userId, data.filename]
         );
 
+        // Update storage usage after file update
+        await storageService.updateUserStorageUsage(userId);
+
         return { success: true, file: updatedFile };
       } else {
         // Create new file
@@ -84,6 +88,9 @@ class SyncService {
           'SELECT * FROM sync_files WHERE id = $1',
           [fileId]
         );
+
+        // Update storage usage after new file creation
+        await storageService.updateUserStorageUsage(userId);
 
         return { success: true, file: newFile };
       }
@@ -243,6 +250,11 @@ class SyncService {
       'DELETE FROM sync_files WHERE user_id = $1 AND filename = $2',
       [userId, filename]
     );
+
+    // Update storage usage after file deletion
+    if (result.changes > 0) {
+      await storageService.updateUserStorageUsage(userId);
+    }
 
     return result.changes > 0;
   }

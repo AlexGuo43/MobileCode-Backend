@@ -1,13 +1,15 @@
 import { Router } from 'express';
 import { syncService } from '../services/sync';
+import { storageService } from '../services/storage';
 import { authenticateToken, AuthRequest } from '../middleware/auth';
 import { validate, schemas } from '../middleware/validation';
+import { validateStorage } from '../middleware/storage';
 
 const router = Router();
 
 
 // Upload/update a single file
-router.post('/files', authenticateToken, validate(schemas.syncFile), async (req: AuthRequest, res, next) => {
+router.post('/files', authenticateToken, validate(schemas.syncFile), validateStorage, async (req: AuthRequest, res, next) => {
   try {
     const result = await syncService.uploadFile(
       req.user!.userId,
@@ -68,7 +70,7 @@ router.get('/files', authenticateToken, async (req: AuthRequest, res, next) => {
 });
 
 // Sync multiple files (main sync endpoint)
-router.post('/sync', authenticateToken, validate(schemas.syncFiles), async (req: AuthRequest, res, next) => {
+router.post('/sync', authenticateToken, validate(schemas.syncFiles), validateStorage, async (req: AuthRequest, res, next) => {
   try {
     const result = await syncService.syncFiles(
       req.user!.userId,
@@ -114,6 +116,19 @@ router.get('/stats', authenticateToken, async (req: AuthRequest, res, next) => {
     return res.json({
       success: true,
       data: stats
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// Get user storage info
+router.get('/storage', authenticateToken, async (req: AuthRequest, res, next) => {
+  try {
+    const storageInfo = await storageService.getUserStorageInfo(req.user!.userId);
+    return res.json({
+      success: true,
+      data: storageInfo
     });
   } catch (error) {
     return next(error);

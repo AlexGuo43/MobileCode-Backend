@@ -51,6 +51,8 @@ class PostgreSQLDatabaseService {
         email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         name TEXT NOT NULL,
+        storage_used BIGINT DEFAULT 0,
+        storage_limit BIGINT DEFAULT 10485760,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`,
@@ -121,6 +123,16 @@ class PostgreSQLDatabaseService {
 
     for (const table of tables) {
       await this.run(table);
+    }
+
+    // Add storage columns to existing users table if they don't exist
+    const migrations = [
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_used BIGINT DEFAULT 0',
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_limit BIGINT DEFAULT 10485760'
+    ];
+
+    for (const migration of migrations) {
+      await this.run(migration);
     }
 
     // Create indexes for performance
